@@ -1,6 +1,6 @@
 import singer
 from singer import bookmarks as bks_
-from .http import Client
+from tap_yotpo.client import Client
 
 
 class Context(object):

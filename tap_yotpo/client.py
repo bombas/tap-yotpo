@@ -15,8 +15,10 @@ GRANT_TYPE = "client_credentials"
 class RateLimitException(Exception):
     pass
 
+
 class ClientError(Exception):
     pass
+
 
 class BadGateway(Exception):
     pass
@@ -62,26 +64,30 @@ class Client(object):
                                 **kwargs)
 
     @backoff.on_exception(backoff.expo,
-                          RateLimitException,
+                          (RateLimitException, ClientError, BadGateway, requests.exceptions.ConnectionError),
                           max_tries=10,
                           factor=2)
     def request_with_handling(self, request, tap_stream_id):
         with metrics.http_request_timer(tap_stream_id) as timer:
             response = self.prepare_and_send(request)
             timer.tags[metrics.Tag.http_status_code] = response.status_code
-        if response.status_code in [429, 503, 504]:
-            raise RateLimitException()
-        if response.status_code == 404:
-            return None
-        if response.status_code == 400:
-            raise ClientError()
-        if response.status_code == 502:
-            raise BadGateway()
         try:
             response.raise_for_status()
             return response.json()
-        except requests.exceptions.ConnectionError:
+        except requests.exceptions.HTTPError:
+            LOGGER.exception(response.json())
+            if response.status_code in [429, 503, 504]:
+                raise RateLimitException()
+            if response.status_code == 400:
+                raise ClientError()
+            if response.status_code == 502:
+                raise BadGateway()
+            if response.status_code == 404:
+                # Record Not Found - Couldn't find Account with app_key
+                return None
+        except requests.exceptions.ConnectionError as e:
             self.authenticate()
+            raise e
 
     def authenticate(self):
         auth_body = {
